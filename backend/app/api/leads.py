@@ -9,6 +9,7 @@ from app.services.lead_service import lead_service, LeadService
 from app.services.grok_service import grok_service
 from app.services.email_service import email_service
 from app.services.scheduler_service import scheduler_service
+from app.services.evaluation_service import ModelEvaluationService, EvaluationCategory
 
 logger = logging.getLogger(__name__)
 
@@ -578,4 +579,312 @@ async def get_lead_scheduled_emails(
         "lead_id": lead_id,
         "scheduled_jobs": jobs,
         "total": len(jobs)
+    }
+
+
+# ============================================================================
+# MODEL EVALUATION ENDPOINTS
+# ============================================================================
+
+# Initialize evaluation service
+evaluation_service = ModelEvaluationService()
+
+@router.post("/evaluation/run")
+async def run_model_evaluation(
+    request: dict,
+    service: LeadService = Depends(get_lead_service)
+):
+    """
+    Run model evaluation suite to test Grok AI performance
+
+    Body:
+    {
+        "test_ids": ["enterprise_lead_001", "low_quality_lead_001"],  # Optional: specific tests
+        "categories": ["lead_scoring", "bant_analysis"],  # Optional: filter by category
+        "tags": ["baseline", "enterprise"],  # Optional: filter by tags
+        "generate_report": true  # Optional: generate full report (default: true)
+    }
+
+    Available categories:
+    - lead_scoring
+    - bant_analysis
+    - priority_classification
+    - deal_size_estimation
+    - insight_generation
+    - red_flag_detection
+    - next_action_recommendation
+    """
+    test_ids = request.get("test_ids")
+    categories = request.get("categories")
+    tags = request.get("tags")
+    generate_report = request.get("generate_report", True)
+
+    # Convert category strings to enums if provided
+    category_enums = None
+    if categories:
+        try:
+            category_enums = [EvaluationCategory(cat) for cat in categories]
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid category: {str(e)}")
+
+    try:
+        # Run evaluation suite
+        results = await evaluation_service.run_evaluation_suite(
+            grok_service=grok_service,
+            test_ids=test_ids,
+            categories=category_enums,
+            tags=tags
+        )
+
+        if generate_report:
+            # Generate comprehensive report
+            report = evaluation_service.generate_evaluation_report(results)
+
+            return {
+                "message": "Evaluation completed successfully",
+                "report": {
+                    "report_id": report.report_id,
+                    "timestamp": report.timestamp,
+                    "summary": {
+                        "total_tests": report.total_tests,
+                        "passed_tests": report.passed_tests,
+                        "failed_tests": report.failed_tests,
+                        "overall_score": round(report.overall_score, 2),
+                        "pass_rate": round((report.passed_tests / report.total_tests * 100) if report.total_tests > 0 else 0, 2)
+                    },
+                    "category_scores": {k: round(v, 2) for k, v in report.category_scores.items()},
+                    "performance_breakdown": report.performance_breakdown,
+                    "actionable_recommendations": report.actionable_recommendations,
+                    "prompt_iteration_plan": report.prompt_iteration_plan,
+                    "qualitative_analyses": [
+                        {
+                            "category": qa.category.value,
+                            "confidence_score": round(qa.confidence_score, 2),
+                            "underperformance_patterns": qa.underperformance_patterns,
+                            "specific_failure_cases": qa.specific_failure_cases,
+                            "root_cause_analysis": qa.root_cause_analysis,
+                            "prompt_improvement_suggestions": qa.prompt_improvement_suggestions
+                        }
+                        for qa in report.qualitative_analyses
+                    ]
+                }
+            }
+        else:
+            # Return just the results
+            return {
+                "message": "Evaluation completed successfully",
+                "results": [
+                    {
+                        "test_id": r.test_id,
+                        "category": r.category.value,
+                        "score": round(r.score, 2),
+                        "passed": r.passed,
+                        "performance_level": r.performance_level.value,
+                        "discrepancies": r.discrepancies,
+                        "strengths": r.strengths,
+                        "response_time_ms": round(r.response_time_ms, 2)
+                    }
+                    for r in results
+                ]
+            }
+
+    except Exception as e:
+        logger.error(f"Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
+@router.get("/evaluation/test-cases")
+async def list_test_cases(
+    category: Optional[str] = None,
+    tags: Optional[str] = None
+):
+    """
+    List all available test cases
+
+    Query params:
+    - category: Filter by category
+    - tags: Comma-separated tags to filter by
+    """
+    test_cases = evaluation_service.test_cases
+
+    # Filter by category
+    if category:
+        try:
+            cat_enum = EvaluationCategory(category)
+            test_cases = {k: v for k, v in test_cases.items() if v.category == cat_enum}
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid category: {category}")
+
+    # Filter by tags
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",")]
+        test_cases = {
+            k: v for k, v in test_cases.items()
+            if any(tag in v.tags for tag in tag_list)
+        }
+
+    return {
+        "test_cases": [
+            {
+                "test_id": tc.test_id,
+                "category": tc.category.value,
+                "description": tc.description,
+                "tags": tc.tags,
+                "expected_output": tc.expected_output
+            }
+            for tc in test_cases.values()
+        ],
+        "total": len(test_cases)
+    }
+
+
+@router.get("/evaluation/reports")
+async def list_evaluation_reports(
+    limit: int = 10
+):
+    """
+    List recent evaluation reports
+
+    Query params:
+    - limit: Number of recent reports to return (default: 10)
+    """
+    reports = evaluation_service.reports[-limit:]
+
+    return {
+        "reports": [
+            {
+                "report_id": r.report_id,
+                "timestamp": r.timestamp,
+                "total_tests": r.total_tests,
+                "passed_tests": r.passed_tests,
+                "overall_score": round(r.overall_score, 2),
+                "pass_rate": round((r.passed_tests / r.total_tests * 100) if r.total_tests > 0 else 0, 2)
+            }
+            for r in reports
+        ],
+        "total": len(reports)
+    }
+
+
+@router.get("/evaluation/reports/{report_id}")
+async def get_evaluation_report(report_id: str):
+    """Get detailed evaluation report by ID"""
+
+    # Find report
+    report = next((r for r in evaluation_service.reports if r.report_id == report_id), None)
+
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+
+    return {
+        "report_id": report.report_id,
+        "timestamp": report.timestamp,
+        "summary": {
+            "total_tests": report.total_tests,
+            "passed_tests": report.passed_tests,
+            "failed_tests": report.failed_tests,
+            "overall_score": round(report.overall_score, 2),
+            "pass_rate": round((report.passed_tests / report.total_tests * 100) if report.total_tests > 0 else 0, 2)
+        },
+        "category_scores": {k: round(v, 2) for k, v in report.category_scores.items()},
+        "performance_breakdown": report.performance_breakdown,
+        "actionable_recommendations": report.actionable_recommendations,
+        "prompt_iteration_plan": report.prompt_iteration_plan,
+        "qualitative_analyses": [
+            {
+                "category": qa.category.value,
+                "confidence_score": round(qa.confidence_score, 2),
+                "underperformance_patterns": qa.underperformance_patterns,
+                "specific_failure_cases": qa.specific_failure_cases,
+                "root_cause_analysis": qa.root_cause_analysis,
+                "prompt_improvement_suggestions": qa.prompt_improvement_suggestions
+            }
+            for qa in report.qualitative_analyses
+        ],
+        "detailed_results": [
+            {
+                "test_id": r.test_id,
+                "category": r.category.value,
+                "score": round(r.score, 2),
+                "passed": r.passed,
+                "performance_level": r.performance_level.value,
+                "discrepancies": r.discrepancies,
+                "strengths": r.strengths,
+                "response_time_ms": round(r.response_time_ms, 2),
+                "actual_output": r.actual_output,
+                "expected_output": r.expected_output
+            }
+            for r in report.detailed_results
+        ]
+    }
+
+
+@router.get("/evaluation/reports/{report_id}/export")
+async def export_evaluation_report(report_id: str):
+    """Export evaluation report as JSON file"""
+
+    # Find report
+    report = next((r for r in evaluation_service.reports if r.report_id == report_id), None)
+
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+
+    # Export to JSON
+    json_export = evaluation_service.export_report_to_json(report)
+
+    return {
+        "report_id": report_id,
+        "export": json_export,
+        "message": "Report exported successfully"
+    }
+
+
+@router.post("/evaluation/compare")
+async def compare_evaluation_reports(request: dict):
+    """
+    Compare two evaluation reports to track improvement
+
+    Body:
+    {
+        "report1_id": "eval_report_20250101_120000",
+        "report2_id": "eval_report_20250102_120000"
+    }
+    """
+    report1_id = request.get("report1_id")
+    report2_id = request.get("report2_id")
+
+    if not report1_id or not report2_id:
+        raise HTTPException(status_code=400, detail="Both report1_id and report2_id are required")
+
+    # Find reports
+    report1 = next((r for r in evaluation_service.reports if r.report_id == report1_id), None)
+    report2 = next((r for r in evaluation_service.reports if r.report_id == report2_id), None)
+
+    if not report1:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report1_id}")
+    if not report2:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report2_id}")
+
+    # Generate comparison
+    comparison = evaluation_service.get_comparison_report(report1, report2)
+
+    return {
+        "message": "Reports compared successfully",
+        "comparison": {
+            "report1": {
+                "id": report1.report_id,
+                "timestamp": report1.timestamp,
+                "overall_score": round(report1.overall_score, 2)
+            },
+            "report2": {
+                "id": report2.report_id,
+                "timestamp": report2.timestamp,
+                "overall_score": round(report2.overall_score, 2)
+            },
+            "overall_score_change": round(comparison["overall_score_change"], 2),
+            "pass_rate_change": round(comparison["pass_rate_change"], 2),
+            "category_improvements": {k: round(v, 2) for k, v in comparison["category_improvements"].items()},
+            "category_regressions": {k: round(v, 2) for k, v in comparison["category_regressions"].items()},
+            "summary": comparison["summary"]
+        }
     }
