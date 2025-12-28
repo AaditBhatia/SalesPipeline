@@ -1,11 +1,14 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional
 import logging
+from datetime import datetime, timedelta
+import random
 
 from app.schemas.lead import LeadCreate, LeadUpdate, LeadResponse
 from app.services.lead_service import lead_service, LeadService
 from app.services.grok_service import grok_service
 from app.services.email_service import email_service
+from app.services.scheduler_service import scheduler_service
 
 logger = logging.getLogger(__name__)
 
@@ -433,4 +436,146 @@ async def send_followup_email(
     return {
         "message": "Follow-up sent successfully" if result['success'] else "Failed to send follow-up",
         "result": result
+    }
+
+@router.post("/{lead_id}/schedule-email")
+async def schedule_email(
+    lead_id: str,
+    request: dict,
+    service: LeadService = Depends(get_lead_service)
+):
+    """
+    Schedule an email to be sent at a specific time
+
+    Body:
+    {
+        "email_type": "initial_contact" | "demo_invite" | "follow_up",
+        "delay_minutes": 60  # Optional: minutes from now
+        # OR
+        "scheduled_time": "2025-01-15T10:00:00Z"  # Optional: specific UTC time
+    }
+    """
+    lead = service.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    email_type = request.get("email_type")
+    if not email_type or email_type not in ["initial_contact", "demo_invite", "follow_up"]:
+        raise HTTPException(
+            status_code=400,
+            detail="email_type must be one of: initial_contact, demo_invite, follow_up"
+        )
+
+    delay_minutes = request.get("delay_minutes", 0)
+    scheduled_time_str = request.get("scheduled_time")
+
+    scheduled_time = None
+    if scheduled_time_str:
+        try:
+            scheduled_time = datetime.fromisoformat(scheduled_time_str.replace('Z', '+00:00'))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid scheduled_time format. Use ISO 8601 format.")
+
+    try:
+        result = scheduler_service.schedule_email(
+            lead_id=lead_id,
+            email_type=email_type,
+            delay_minutes=delay_minutes,
+            scheduled_time=scheduled_time
+        )
+
+        return {
+            "message": f"Email scheduled successfully for {result['scheduled_time']}",
+            "result": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{lead_id}/schedule-sequence")
+async def schedule_email_sequence(
+    lead_id: str,
+    request: dict,
+    service: LeadService = Depends(get_lead_service)
+):
+    """
+    Schedule an automated email sequence (drip campaign)
+
+    Body:
+    {
+        "sequence_name": "standard" | "aggressive" | "nurture"
+    }
+
+    Sequences:
+    - standard: Initial → 2 days → Follow-up → 3 days → Demo
+    - aggressive: Initial → 1 day → Follow-up → 1 day → Demo
+    - nurture: Initial → 3 days → Follow-up → 7 days → Follow-up → 7 days → Demo
+    """
+    lead = service.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    sequence_name = request.get("sequence_name", "standard")
+    if sequence_name not in ["standard", "aggressive", "nurture"]:
+        raise HTTPException(
+            status_code=400,
+            detail="sequence_name must be one of: standard, aggressive, nurture"
+        )
+
+    try:
+        result = scheduler_service.schedule_email_sequence(
+            lead_id=lead_id,
+            sequence_name=sequence_name
+        )
+
+        return {
+            "message": f"Email sequence '{sequence_name}' scheduled successfully",
+            "result": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/scheduled-emails/{job_id}")
+async def cancel_scheduled_email(job_id: str):
+    """Cancel a scheduled email job"""
+    result = scheduler_service.cancel_scheduled_email(job_id)
+
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return {
+        "message": "Scheduled email cancelled successfully",
+        "job_id": job_id
+    }
+
+@router.get("/scheduled-emails")
+async def get_scheduled_emails(lead_id: Optional[str] = None):
+    """
+    Get all scheduled email jobs
+
+    Query params:
+    - lead_id: Optional filter by lead ID
+    """
+    jobs = scheduler_service.get_scheduled_jobs(lead_id=lead_id)
+
+    return {
+        "scheduled_jobs": jobs,
+        "total": len(jobs)
+    }
+
+@router.get("/{lead_id}/scheduled-emails")
+async def get_lead_scheduled_emails(
+    lead_id: str,
+    service: LeadService = Depends(get_lead_service)
+):
+    """Get all scheduled emails for a specific lead"""
+    lead = service.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    jobs = scheduler_service.get_scheduled_jobs(lead_id=lead_id)
+
+    return {
+        "lead_id": lead_id,
+        "scheduled_jobs": jobs,
+        "total": len(jobs)
     }
