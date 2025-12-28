@@ -144,7 +144,19 @@ async def score_lead_endpoint(
         logger.info(f"Score: {scoring_result['score']}/100")
         logger.info("="*80)
         
-        email_result = email_service.send_initial_contact(updated_lead.model_dump())
+        # Generate AI-powered email content
+        logger.info("✨ Generating AI-powered email content...")
+        ai_email = await grok_service.generate_email(
+            updated_lead.model_dump(),
+            scoring_result,
+            email_type="initial_contact"
+        )
+        
+        email_result = await email_service.send_initial_contact(
+            updated_lead.model_dump(),
+            ai_email_content=ai_email
+        )
+        
         if email_result.get("success"):
             email_sent = True
             # Update lead status to contacted since email was sent
@@ -153,13 +165,20 @@ async def score_lead_endpoint(
             service._log_activity(
                 lead_id,
                 "email_sent",
-                f"Initial contact email sent to {updated_lead.email}",
-                {"email_id": email_result.get("email_id"), "type": "initial_contact"}
+                f"AI-generated email sent to {updated_lead.email}",
+                {
+                    "email_id": email_result.get("email_id"),
+                    "type": "initial_contact",
+                    "ai_generated": True,
+                    "subject": ai_email.get("subject"),
+                    "key_points": ai_email.get("key_points", [])
+                }
             )
             
             logger.info("="*80)
             logger.info("✅ EMAIL AUTOMATION COMPLETED")
             logger.info(f"Status updated: new → contacted")
+            logger.info(f"Email subject: {ai_email.get('subject')}")
             logger.info("="*80)
     except Exception as e:
         logger.error("="*80)

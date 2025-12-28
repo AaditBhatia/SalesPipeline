@@ -55,8 +55,8 @@ class EmailService:
 
         return loop.run_until_complete(self._send_email_async(to_email, subject, html_content))
     
-    def send_initial_contact(self, lead_data: dict) -> dict:
-        """Send initial contact email"""
+    async def send_initial_contact(self, lead_data: dict, ai_email_content: dict = None) -> dict:
+        """Send initial contact email with AI-generated content"""
         first_name = lead_data.get('first_name')
         company = lead_data.get('company_name')
         email = lead_data.get('email')
@@ -66,37 +66,44 @@ class EmailService:
         logger.info(f"To: {email}")
         logger.info(f"Type: Initial Contact")
         logger.info(f"Lead: {first_name} from {company}")
+        if ai_email_content:
+            logger.info("✨ Using AI-generated content")
         logger.info("="*80)
 
-        subject = f"Great to connect, {first_name}!"
-        html_content = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2>Hi {first_name}!</h2>
+        # Use AI-generated content if provided, otherwise use template
+        if ai_email_content:
+            subject = ai_email_content.get('subject', f"Great to connect, {first_name}!")
+            html_content = ai_email_content.get('body_html')
+        else:
+            subject = f"Great to connect, {first_name}!"
+            html_content = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2>Hi {first_name}!</h2>
 
-            <p>Thanks for your interest in {self.company_name}! We're excited to learn more about {company}.</p>
+                <p>Thanks for your interest in {self.company_name}! We're excited to learn more about {company}.</p>
 
-            <p>Based on your profile, I think you'd be a great fit for our API infrastructure platform.</p>
+                <p>Based on your profile, I think you'd be a great fit for our API infrastructure platform.</p>
 
-            <h3>Why teams love us:</h3>
-            <ul>
-                <li>99.99% uptime SLA</li>
-                <li>Enterprise-grade security</li>
-                <li>Setup in under 30 minutes</li>
-                <li>24/7 support</li>
-            </ul>
+                <h3>Why teams love us:</h3>
+                <ul>
+                    <li>99.99% uptime SLA</li>
+                    <li>Enterprise-grade security</li>
+                    <li>Setup in under 30 minutes</li>
+                    <li>24/7 support</li>
+                </ul>
 
-            <p>Let's chat! Reply to this email with your availability.</p>
+                <p>Let's chat! Reply to this email with your availability.</p>
 
-            <p>Looking forward to connecting!</p>
+                <p>Looking forward to connecting!</p>
 
-            <p><strong>Your Sales Team</strong><br>
-            {self.company_name}</p>
-        </body>
-        </html>
-        """
+                <p><strong>Your Sales Team</strong><br>
+                {self.company_name}</p>
+            </body>
+            </html>
+            """
 
-        result = self._send_email_sync(email, subject, html_content)
+        result = await self._send_email_async(email, subject, html_content)
 
         if result["success"]:
             logger.info("="*80)
@@ -113,7 +120,7 @@ class EmailService:
 
         return result
     
-    def send_demo_invite(self, lead_data: dict, calendly_link: str = "https://calendly.com/your-company/demo") -> dict:
+    async def send_demo_invite(self, lead_data: dict, calendly_link: str = "https://calendly.com/your-company/demo") -> dict:
         """Send demo scheduling invite with Calendly link"""
         first_name = lead_data.get('first_name')
         company = lead_data.get('company_name')
@@ -157,7 +164,7 @@ class EmailService:
         </html>
         """
 
-        result = self._send_email_sync(email, subject, html_content)
+        result = await self._send_email_async(email, subject, html_content)
 
         if result["success"]:
             logger.info(f"Demo invite sent to {email}: {result.get('email_id')}")

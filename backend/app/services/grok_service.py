@@ -207,6 +207,193 @@ Be specific and actionable in your reasoning."""
 
         return base_prompt
     
+    async def generate_email(self, lead_data: Dict[str, Any], scoring_result: Dict[str, Any], email_type: str = "initial_contact") -> Dict[str, Any]:
+        """
+        Use Grok AI to generate personalized email content based on lead profile and scoring
+        Args:
+            lead_data: Lead information dictionary
+            scoring_result: AI scoring results with insights
+            email_type: Type of email (initial_contact, demo_invite, follow_up)
+        """
+        prompt = self._build_email_prompt(lead_data, scoring_result, email_type)
+        
+        logger.info("="*80)
+        logger.info("✉️ GROK EMAIL GENERATION STARTING")
+        logger.info(f"Lead: {lead_data.get('first_name')} {lead_data.get('last_name')}")
+        logger.info(f"Email Type: {email_type}")
+        logger.info(f"Lead Score: {scoring_result.get('score')}/100")
+        logger.info("="*80)
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": """You are an expert B2B sales email writer. You create personalized, engaging emails that:
+1. Reference specific details from the lead's profile
+2. Highlight relevant value propositions based on their role and company
+3. Use a professional but friendly tone
+4. Include clear calls-to-action
+5. Are concise (3-4 short paragraphs max)
+
+Respond ONLY with valid JSON in this format:
+{
+    "subject": "<compelling subject line>",
+    "body_html": "<HTML email body with proper formatting>",
+    "key_points": ["<point 1>", "<point 2>", "<point 3>"]
+}
+
+The HTML should use inline styles and be email-client friendly."""
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 1000
+                    }
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                content = result["choices"][0]["message"]["content"]
+                
+                # Clean up markdown code blocks if present
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                email_result = json.loads(content)
+                
+                logger.info("="*80)
+                logger.info("✅ EMAIL GENERATION SUCCESS")
+                logger.info(f"Subject: {email_result.get('subject')}")
+                logger.info(f"Body Length: {len(email_result.get('body_html', ''))} chars")
+                logger.info("="*80)
+                
+                return email_result
+                
+        except Exception as e:
+            logger.error(f"Email generation error: {e}")
+            # Return fallback email
+            return self._fallback_email(lead_data, email_type)
+    
+    def _build_email_prompt(self, lead_data: Dict[str, Any], scoring_result: Dict[str, Any], email_type: str) -> str:
+        """Build prompt for email generation"""
+        first_name = lead_data.get('first_name')
+        company = lead_data.get('company_name')
+        job_title = lead_data.get('job_title')
+        insights = scoring_result.get('key_insights', [])
+        strengths = scoring_result.get('strengths', [])
+        
+        if email_type == "initial_contact":
+            return f"""Generate a personalized initial contact email for this B2B sales lead:
+
+Lead Profile:
+- Name: {first_name}
+- Job Title: {job_title}
+- Company: {company}
+- Company Size: {lead_data.get('company_size')}
+- Industry: {lead_data.get('industry')}
+
+AI Scoring Insights:
+- Score: {scoring_result.get('score')}/100
+- Priority: {scoring_result.get('priority_level')}
+- Key Insights: {', '.join(insights)}
+- Strengths: {', '.join(strengths)}
+
+Our Product:
+- B2B SaaS API infrastructure platform
+- 99.99% uptime SLA
+- Enterprise-grade security
+- Setup in under 30 minutes
+- 24/7 support
+
+Requirements:
+1. Reference their specific role ({job_title}) and company ({company})
+2. Highlight 2-3 benefits most relevant to their situation
+3. Use insights from the AI scoring to personalize
+4. Keep it concise and professional
+5. End with a clear call-to-action (reply with availability)
+6. Use HTML formatting with proper structure"""
+
+        elif email_type == "demo_invite":
+            return f"""Generate a demo invitation email for this qualified lead:
+
+Lead Profile:
+- Name: {first_name}
+- Job Title: {job_title}
+- Company: {company}
+- Score: {scoring_result.get('score')}/100
+- Deal Size: {scoring_result.get('estimated_deal_size')}
+
+Requirements:
+1. Congratulate them on being qualified
+2. Emphasize the personalized demo for {company}
+3. Highlight what they'll see in the demo
+4. Include a clear CTA button for scheduling
+5. Professional but excited tone
+6. Use HTML with inline styles"""
+
+        else:  # follow_up
+            return f"""Generate a follow-up email for this lead:
+
+Lead Profile:
+- Name: {first_name}
+- Company: {company}
+- Previous Score: {scoring_result.get('score')}/100
+
+Requirements:
+1. Friendly check-in tone
+2. Offer to answer questions
+3. Provide value (resources, insights)
+4. Easy reply CTA
+5. Keep it brief
+6. Use HTML formatting"""
+    
+    def _fallback_email(self, lead_data: Dict[str, Any], email_type: str) -> Dict[str, Any]:
+        """Fallback email templates if AI generation fails"""
+        first_name = lead_data.get('first_name')
+        company = lead_data.get('company_name')
+        
+        if email_type == "initial_contact":
+            return {
+                "subject": f"Great to connect, {first_name}!",
+                "body_html": f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+<h2>Hi {first_name}!</h2>
+<p>Thanks for your interest in our platform! We're excited to learn more about {company}.</p>
+<p>Based on your profile, I think you'd be a great fit for our API infrastructure platform.</p>
+<h3>Why teams love us:</h3>
+<ul>
+<li>99.99% uptime SLA</li>
+<li>Enterprise-grade security</li>
+<li>Setup in under 30 minutes</li>
+<li>24/7 support</li>
+</ul>
+<p>Let's chat! Reply to this email with your availability.</p>
+<p>Looking forward to connecting!</p>
+<p><strong>Your Sales Team</strong></p>
+</body></html>""",
+                "key_points": ["Platform introduction", "Key benefits", "Call to action"]
+            }
+        
+        return {
+            "subject": f"Following up, {first_name}",
+            "body_html": f"<html><body><p>Hi {first_name},</p><p>Just checking in about {company}'s needs. Let me know if you have any questions!</p></body></html>",
+            "key_points": ["Follow up", "Offer help"]
+        }
+    
     def _fallback_scoring(self, lead_data: Dict[str, Any]) -> Dict[str, Any]:
         """Enhanced fallback with detailed reasoning"""
         score = 0

@@ -184,7 +184,7 @@ function LeadDetail() {
     const allSteps = [
       { id: 'new', label: 'New Lead', icon: '📥', activityTypes: ['lead_created'] },
       { id: 'scored', label: 'Scored', icon: '📊', scoreRequired: true, activityTypes: ['ai_scoring', 'score_updated'] },
-      { id: 'contacted', label: 'Contacted', icon: '📞', activityTypes: ['status_changed'] },
+      { id: 'contacted', label: 'Contacted', icon: '📞', activityTypes: ['status_changed', 'email_sent', 'email_failed'] },
       { id: 'qualified', label: 'Qualified', icon: '✅', activityTypes: ['ai_qualification', 'status_changed'] },
       { id: 'demo', label: 'Demo Scheduled', icon: '📅', activityTypes: ['status_changed', 'workflow_completed'] },
       { id: 'closed_won', label: 'Closed Won', icon: '🎉', activityTypes: ['status_changed'] },
